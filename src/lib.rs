@@ -13,12 +13,16 @@ use pnet::transport::{TransportSender, TransportReceiver};
 use pnet::transport::TransportChannelType::Layer4;
 use pnet::transport::TransportProtocol::{Ipv4, Ipv6};
 use std::net::{IpAddr};
-use ::ping::{send_echo, send_echov6};
+use ::ping::{send_pings};
 use std::time::{Duration, Instant};
 use std::collections::BTreeMap;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::sync::{Arc, Mutex, RwLock};
+
+
+// result type returned by fastping_rs::Pinger::new()
+pub type NewPingerResult = Result<(Pinger, Receiver<PingResult>), String>;
 
 // ping result type.  Idle represents pings that have not received a repsonse within the max_rtt.
 // Receive represents pings which have received a repsonse
@@ -27,16 +31,13 @@ pub enum PingResult {
     Receive{addr: IpAddr, rtt: Duration},
 }
 
-// result type returned by fastping_rs::Pinger::new()
-pub type NewPingerResult = Result<(Pinger, Receiver<PingResult>), String>;
-
 pub struct Pinger {
     // Number of milliseconds of an idle timeout. Once it passed,
 	// the library calls an idle callback function.  Default is 2000
-    max_rtt: Duration,
+    max_rtt: Arc<Duration>,
 
     // map of addresses to ping on each run
-    addrs: BTreeMap<IpAddr, bool>,
+    addrs: Arc<Mutex<BTreeMap<IpAddr, bool>>>,
 
     // Size in bytes of the payload to send.  Default is 16 bytes
     size: i32,
@@ -45,13 +46,13 @@ pub struct Pinger {
     results_sender: Sender<PingResult>,
 
     // sender end of libpnet icmp v4 transport channel
-    tx: TransportSender,
+    tx: Arc<Mutex<TransportSender>>,
 
     // receiver end of libpnet icmp v4 transport channel
     rx: Arc<Mutex<TransportReceiver>>,
 
     // sender end of libpnet icmp v6 transport channel
-    txv6: TransportSender,
+    txv6: Arc<Mutex<TransportSender>>,
 
     // receiver end of libpnet icmp v6 transport channel
     rxv6: Arc<Mutex<TransportReceiver>>,
@@ -60,13 +61,13 @@ pub struct Pinger {
     thread_tx: Sender<PingResult>,
 
     // receiver for internal result passing beween threads
-    thread_rx: Receiver<PingResult>,
+    thread_rx: Arc<Mutex<Receiver<PingResult>>>,
 
     // timer for tracking round trip times
     timer: Arc<RwLock<Instant>>,
 
     // flag to stop pinging
-    stop: bool,
+    stop: Arc<Mutex<bool>>,
 }
 
 impl Pinger {
@@ -90,21 +91,21 @@ impl Pinger {
         let (thread_tx, thread_rx) = channel();
 
         let mut pinger = Pinger{
-            max_rtt: Duration::from_millis(2000),
-            addrs: addrs,
+            max_rtt: Arc::new(Duration::from_millis(2000)),
+            addrs: Arc::new(Mutex::new(addrs)),
             size: 16,
             results_sender: sender,
-            tx: tx,
+            tx: Arc::new(Mutex::new(tx)),
             rx: Arc::new(Mutex::new(rx)),
-            txv6: txv6,
+            txv6: Arc::new(Mutex::new(txv6)),
             rxv6: Arc::new(Mutex::new(rxv6)),
-            thread_rx: thread_rx,
+            thread_rx: Arc::new(Mutex::new(thread_rx)),
             thread_tx: thread_tx,
             timer: Arc::new(RwLock::new(Instant::now())),
-            stop: false,
+            stop: Arc::new(Mutex::new(false)),
         };
         if let Some(rtt_value) = _max_rtt {
-            pinger.max_rtt = Duration::from_millis(rtt_value);
+            pinger.max_rtt = Arc::new(Duration::from_millis(rtt_value));
         }
         if let Some(size_value) = _size {
             pinger.size = size_value;
@@ -115,12 +116,12 @@ impl Pinger {
     }
 
     // add either an ipv4 or ipv6 target address for pinging
-    pub fn add_ipaddr(&mut self, ipaddr: &str) {
+    pub fn add_ipaddr(&self, ipaddr: &str) {
         let addr = ipaddr.parse::<IpAddr>();
         match addr {
             Ok(valid_addr) => {
                 debug!("Address added {}", valid_addr);
-                self.addrs.insert(valid_addr, true);
+                self.addrs.lock().unwrap().insert(valid_addr, true);
             }
             Err(e) => {
                 error!("Error adding ip address {}. Error: {}", ipaddr, e);
@@ -129,12 +130,12 @@ impl Pinger {
     }
 
     // remove a previously added ipv4 or ipv6 target address
-    pub fn remove_ipaddr(&mut self, ipaddr: &str) {
+    pub fn remove_ipaddr(&self, ipaddr: &str) {
         let addr = ipaddr.parse::<IpAddr>();
         match addr {
             Ok(valid_addr) => {
                 debug!("Address removed {}", valid_addr);
-                self.addrs.remove(&valid_addr);
+                self.addrs.lock().unwrap().remove(&valid_addr);
             }
             Err(e) => {
                 error!("Error removing ip address {}. Error: {}", ipaddr, e);
@@ -143,87 +144,51 @@ impl Pinger {
     }
 
     // stop running the continous pinger
-    pub fn stop_pinger(&mut self) {
-        self.stop = true;
+    pub fn stop_pinger(&self) {
+        let mut stop = self.stop.lock().unwrap();
+        *stop = true;
     }
 
     // run one round of pinging and stop
-    pub fn ping_once(self) {
-        self.pings(true);
+    pub fn ping_once(&self) {
+        self.run_pings(true)
     }
 
     // run the continuous pinger
-    pub fn run_pinger(self) {
-        thread::spawn(move ||{
-            self.pings(false);
-        });
+    pub fn run_pinger(&self) {
+        self.run_pings(false)
     }
 
-    fn pings(mut self, run_once: bool) {
-        loop {
-            for (addr, seen) in self.addrs.iter_mut() {
-                if addr.is_ipv4() {
-                    send_echo(&mut self.tx, *addr);
-                } else if addr.is_ipv6() {
-                    send_echov6(&mut self.txv6, *addr);
-                }
-                *seen = false;
+    // run pinger either once or continuously
+    fn run_pings(&self, run_once: bool) {
+        {
+            let mut stop = self.stop.lock().unwrap();
+            if run_once {
+                info!("TEST run once is true");
+                *stop = true;
+            } else {
+                *stop = false;
             }
-            {
-                // start the timer
-                let mut timer = self.timer.write().unwrap();
-                *timer = Instant::now();
-            }
+        }
 
-            loop {
-                match self.thread_rx.try_recv() {
-                    Ok(result) => {
-                        match result {
-                            PingResult::Receive{addr, rtt: _} => {
-                                // Update the address to the ping response being received
-                                if let Some(seen) = self.addrs.get_mut(&addr) {
-                                    *seen = true;
-                                }
-                                // Send the ping result over the client channel
-                                match self.results_sender.send(result) {
-                                    Ok(_) => {},
-                                    Err(e) => {
-                                        error!("Error sending ping result on channel: {}", e)
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    },
-                    Err(_) => {
-                        // Check we haven't exceeded the max rtt
-                        let start_time = self.timer.read().unwrap();
-                        if Instant::now().duration_since(*start_time) > self.max_rtt {
-                            break
-                        }
-                    }
-                }
-            }
-            // check for addresses which haven't replied
-            for (addr, seen) in self.addrs.iter() {
-                if *seen == false {
-                    // Send the ping Idle over the client channel
-                    match self.results_sender.send(PingResult::Idle{addr: *addr}) {
-                        Ok(_) => {},
-                        Err(e) => {
-                            error!("Error sending ping Idle result on channel: {}", e)
-                        }
-                    }
-                }
-            }
-            // check if we've received the stop signal
-            if self.stop || run_once {
-                return
-            }
+        let thread_rx = self.thread_rx.clone();
+        let tx = self.tx.clone();
+        let txv6 = self.txv6.clone();
+        let results_sender = self.results_sender.clone();
+        let stop = self.stop.clone();
+        let addrs = self.addrs.clone();
+        let timer = self.timer.clone();
+        let max_rtt = self.max_rtt.clone();
+        if run_once {
+            send_pings(timer, stop, results_sender, thread_rx, tx, txv6, addrs, max_rtt);
+        } else {
+            thread::spawn(move ||{
+                send_pings(timer, stop, results_sender, thread_rx, tx, txv6, addrs, max_rtt);
+            });
         }
     }
 
-    fn start_listener(&mut self) {
+    fn start_listener(&self) {
         // start icmp listeners in the background and use internal channels for results
 
         // setup ipv4 listener
@@ -290,7 +255,7 @@ mod tests {
         // test we can use the client channel
         match Pinger::new(Some(3000 as u64), Some(24 as i32)) {
             Ok((test_pinger, test_channel)) => {
-                assert_eq!(test_pinger.max_rtt, Duration::new(3, 0));
+                assert_eq!(test_pinger.max_rtt, Arc::new(Duration::new(3, 0)));
                 assert_eq!(test_pinger.size, 24 as i32);
 
                 match test_pinger.results_sender.send(PingResult::Idle{addr: "127.0.0.1".parse::<IpAddr>().unwrap()}) {
@@ -320,14 +285,14 @@ mod tests {
     #[test]
     fn test_add_remove_addrs() {
         match Pinger::new(None, None) {
-            Ok((mut test_pinger, _)) => {
+            Ok((test_pinger, _)) => {
                 test_pinger.add_ipaddr("127.0.0.1");
-                assert_eq!(test_pinger.addrs.len(), 1);
-                assert!(test_pinger.addrs.contains_key(&"127.0.0.1".parse::<IpAddr>().unwrap()));
+                assert_eq!(test_pinger.addrs.lock().unwrap().len(), 1);
+                assert!(test_pinger.addrs.lock().unwrap().contains_key(&"127.0.0.1".parse::<IpAddr>().unwrap()));
 
                 test_pinger.remove_ipaddr("127.0.0.1");
-                assert_eq!(test_pinger.addrs.len(), 0);
-                assert_eq!(test_pinger.addrs.contains_key(&"127.0.0.1".parse::<IpAddr>().unwrap()), false);
+                assert_eq!(test_pinger.addrs.lock().unwrap().len(), 0);
+                assert_eq!(test_pinger.addrs.lock().unwrap().contains_key(&"127.0.0.1".parse::<IpAddr>().unwrap()), false);
             }
             Err(e) => {
                 println!("Test failed: {}", e);
@@ -339,10 +304,10 @@ mod tests {
     #[test]
     fn test_stop() {
         match Pinger::new(None, None) {
-            Ok((mut test_pinger, _)) => {
-                assert_eq!(test_pinger.stop, false);
+            Ok((test_pinger, _)) => {
+                assert_eq!(*test_pinger.stop.lock().unwrap(), false);
                 test_pinger.stop_pinger();
-                assert_eq!(test_pinger.stop, true);
+                assert_eq!(*test_pinger.stop.lock().unwrap(), true);
             }
             Err(e) => {
                 println!("Test failed: {}", e);
@@ -355,7 +320,7 @@ mod tests {
     fn test_integration() {
         // more comprehensive integration test
         match Pinger::new(None, None) {
-            Ok((mut test_pinger, test_channel)) => {
+            Ok((test_pinger, test_channel)) => {
                 let test_addrs = vec!["127.0.0.1", "7.7.7.7", "::1"];
                 for addr in test_addrs.iter() {
                     test_pinger.add_ipaddr(addr);
