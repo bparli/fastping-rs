@@ -13,7 +13,7 @@ use std::sync::mpsc::{ Sender, Receiver};
 use std::sync::{Arc, Mutex, RwLock};
 use ::PingResult;
 
-fn send_echo(tx: &mut TransportSender, addr: IpAddr) {
+fn send_echo(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io::Error> {
     // Allocate enough space for a new packet
     let mut vec: Vec<u8> = vec![0; 16];
 
@@ -27,15 +27,10 @@ fn send_echo(tx: &mut TransportSender, addr: IpAddr) {
     let csum = icmp_checksum(&echo_packet);
     echo_packet.set_checksum(csum);
 
-    match tx.send_to(echo_packet, addr) {
-        Ok(n) => {
-            debug!("Using payload {}", &n);
-        },
-        Err(e) => panic!("failed to send packet: {}", e),
-    }
+    tx.send_to(echo_packet, addr)
 }
 
-fn send_echov6(tx: &mut TransportSender, addr: IpAddr) {
+fn send_echov6(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io::Error> {
     // Allocate enough space for a new packet
     let mut vec: Vec<u8> = vec![0; 16];
 
@@ -47,12 +42,7 @@ fn send_echov6(tx: &mut TransportSender, addr: IpAddr) {
     let csum = icmpv6_checksum(&echo_packet);
     echo_packet.set_checksum(csum);
 
-    match tx.send_to(echo_packet, addr) {
-        Ok(n) => {
-            debug!("Using payload {}", &n);
-        },
-        Err(e) => panic!("failed to send packet: {}", e),
-    }
+    tx.send_to(echo_packet, addr)
 }
 
 pub fn send_pings(timer: Arc<RwLock<Instant>>,
@@ -66,10 +56,15 @@ pub fn send_pings(timer: Arc<RwLock<Instant>>,
       ) {
       loop {
           for (addr, seen) in addrs.lock().unwrap().iter_mut() {
-              if addr.is_ipv4() {
-                  send_echo(&mut tx.lock().unwrap(), *addr);
+              match if addr.is_ipv4() {
+                  send_echo(&mut tx.lock().unwrap(), *addr)
               } else if addr.is_ipv6() {
-                  send_echov6(&mut txv6.lock().unwrap(), *addr);
+                  send_echov6(&mut txv6.lock().unwrap(), *addr)
+              } else {
+                  Ok(0)
+              } {
+                  Err(e) => error!("Failed to send ping to {:?}: {}", *addr, e),
+                  _ => {}
               }
               *seen = false;
           }
