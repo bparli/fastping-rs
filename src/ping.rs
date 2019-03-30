@@ -74,7 +74,8 @@ pub fn send_pings(timer: Arc<RwLock<Instant>>,
               *timer = Instant::now();
           }
           loop {
-              match thread_rx.lock().unwrap().try_recv() {
+              // use recv_timeout so we don't cause a CPU to needlessly spin
+              match thread_rx.lock().unwrap().recv_timeout(Duration::from_millis(100)) {
                   Ok(result) => {
                       match result {
                           PingResult::Receive{addr, rtt: _} => {
