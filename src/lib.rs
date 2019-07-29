@@ -111,6 +111,7 @@ impl Pinger {
             pinger.size = size_value;
         }
 
+        pinger.start_listener();
         Ok((pinger, receiver))
     }
 
@@ -179,8 +180,6 @@ impl Pinger {
         let timer = self.timer.clone();
         let max_rtt = self.max_rtt.clone();
 
-        self.start_listener();
-
         if run_once {
             send_pings(timer, stop, results_sender, thread_rx, tx, txv6, addrs, max_rtt);
         } else {
@@ -211,8 +210,6 @@ impl Pinger {
                             Err(e) => {
                                 if !*stop.lock().unwrap() {
                                     error!("Error sending ping result on channel: {}", e)
-                                } else {
-                                    return
                                 }
                             }
                         }
@@ -242,8 +239,6 @@ impl Pinger {
                             Err(e) => {
                                 if !*stopv6.lock().unwrap() {
                                     error!("Error sending ping result on channel: {}", e)
-                                } else {
-                                    return
                                 }
                             }
                         }
