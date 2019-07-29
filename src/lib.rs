@@ -161,16 +161,6 @@ impl Pinger {
 
     // run pinger either once or continuously
     fn run_pings(&self, run_once: bool) {
-        {
-            let mut stop = self.stop.lock().unwrap();
-            if run_once {
-                debug!("Running pinger for one round");
-                *stop = true;
-            } else {
-                *stop = false;
-            }
-        }
-
         let thread_rx = self.thread_rx.clone();
         let tx = self.tx.clone();
         let txv6 = self.txv6.clone();
@@ -180,6 +170,16 @@ impl Pinger {
         let timer = self.timer.clone();
         let max_rtt = self.max_rtt.clone();
 
+        {
+            let mut stop = self.stop.lock().unwrap();
+            if run_once {
+                debug!("Running pinger for one round");
+                *stop = true;
+            } else {
+                *stop = false;
+            }
+        }
+        
         if run_once {
             send_pings(timer, stop, results_sender, thread_rx, tx, txv6, addrs, max_rtt);
         } else {
