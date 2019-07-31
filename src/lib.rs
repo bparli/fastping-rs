@@ -161,16 +161,6 @@ impl Pinger {
 
     // run pinger either once or continuously
     fn run_pings(&self, run_once: bool) {
-        {
-            let mut stop = self.stop.lock().unwrap();
-            if run_once {
-                info!("TEST run once is true");
-                *stop = true;
-            } else {
-                *stop = false;
-            }
-        }
-
         let thread_rx = self.thread_rx.clone();
         let tx = self.tx.clone();
         let txv6 = self.txv6.clone();
@@ -179,6 +169,17 @@ impl Pinger {
         let addrs = self.addrs.clone();
         let timer = self.timer.clone();
         let max_rtt = self.max_rtt.clone();
+
+        {
+            let mut stop = self.stop.lock().unwrap();
+            if run_once {
+                debug!("Running pinger for one round");
+                *stop = true;
+            } else {
+                *stop = false;
+            }
+        }
+        
         if run_once {
             send_pings(timer, stop, results_sender, thread_rx, tx, txv6, addrs, max_rtt);
         } else {
@@ -195,6 +196,7 @@ impl Pinger {
         let thread_tx = self.thread_tx.clone();
         let rx = self.rx.clone();
         let timer = self.timer.clone();
+        let stop = self.stop.clone();
 
         thread::spawn(move || {
             let mut receiver = rx.lock().unwrap();
@@ -206,7 +208,9 @@ impl Pinger {
                         match thread_tx.send(PingResult::Receive{addr: addr, rtt: Instant::now().duration_since(*start_time)}) {
                             Ok(_) => {},
                             Err(e) => {
-                                error!("Error sending ping result on channel: {}", e)
+                                if !*stop.lock().unwrap() {
+                                    error!("Error sending ping result on channel: {}", e)
+                                }
                             }
                         }
                     },
@@ -221,6 +225,8 @@ impl Pinger {
         let thread_txv6 = self.thread_tx.clone();
         let rxv6 = self.rxv6.clone();
         let timerv6 = self.timer.clone();
+        let stopv6 = self.stop.clone();
+
         thread::spawn(move || {
             let mut receiver = rxv6.lock().unwrap();
             let mut iter = icmpv6_packet_iter(&mut receiver);
@@ -231,7 +237,9 @@ impl Pinger {
                         match thread_txv6.send(PingResult::Receive{addr: addr, rtt: Instant::now().duration_since(*start_time)}) {
                             Ok(_) => {},
                             Err(e) => {
-                                error!("Error sending ping result on channel: {}", e)
+                                if !*stopv6.lock().unwrap() {
+                                    error!("Error sending ping result on channel: {}", e)
+                                }
                             }
                         }
                     },

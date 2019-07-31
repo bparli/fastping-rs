@@ -82,12 +82,14 @@ pub fn send_pings(timer: Arc<RwLock<Instant>>,
                               // Update the address to the ping response being received
                               if let Some(seen) = addrs.lock().unwrap().get_mut(&addr) {
                                   *seen = true;
-                              }
-                              // Send the ping result over the client channel
-                              match results_sender.send(result) {
-                                  Ok(_) => {},
-                                  Err(e) => {
-                                      error!("Error sending ping result on channel: {}", e)
+                                  // Send the ping result over the client channel
+                                  match results_sender.send(result) {
+                                      Ok(_) => {},
+                                      Err(e) => {
+                                          if !*stop.lock().unwrap() {
+                                              error!("Error sending ping result on channel: {}", e)
+                                          }
+                                      }
                                   }
                               }
                           }
@@ -110,7 +112,9 @@ pub fn send_pings(timer: Arc<RwLock<Instant>>,
                   match results_sender.send(PingResult::Idle{addr: *addr}) {
                       Ok(_) => {},
                       Err(e) => {
-                          error!("Error sending ping Idle result on channel: {}", e)
+                          if !*stop.lock().unwrap() {
+                              error!("Error sending ping Idle result on channel: {}", e)
+                          }
                       }
                   }
               }
