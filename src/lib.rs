@@ -10,7 +10,7 @@ use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::transport::{icmp_packet_iter, icmpv6_packet_iter};
 use pnet::transport::transport_channel;
 use pnet::transport::{TransportSender, TransportReceiver};
-use pnet::transport::TransportChannelType::Layer4;
+use pnet::transport::TransportChannelType::Layer3;
 use pnet::transport::TransportProtocol::{Ipv4, Ipv6};
 use std::net::{IpAddr};
 use ::ping::{send_pings};
@@ -76,13 +76,13 @@ impl Pinger {
         let addrs = BTreeMap::new();
         let (sender, receiver) = channel();
 
-        let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
+        let protocol = Layer3(IpNextHeaderProtocols::Icmp);
         let (tx, rx) = match transport_channel(4096, protocol) {
             Ok((tx, rx)) => (tx, rx),
             Err(e) => return Err(e.to_string()),
         };
 
-        let protocolv6 = Layer4(Ipv6(IpNextHeaderProtocols::Icmpv6));
+        let protocolv6 = Layer3(IpNextHeaderProtocols::Icmpv6);
         let (txv6, rxv6) = match transport_channel(4096, protocolv6) {
             Ok((txv6, rxv6)) => (txv6, rxv6),
             Err(e) => return Err(e.to_string()),
@@ -179,7 +179,7 @@ impl Pinger {
                 *stop = false;
             }
         }
-        
+
         if run_once {
             send_pings(timer, stop, results_sender, thread_rx, tx, txv6, addrs, max_rtt);
         } else {

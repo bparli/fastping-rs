@@ -1,9 +1,11 @@
-use std::net::{IpAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use rand::random;
-use pnet::packet::icmp::{IcmpTypes};
+use pnet::packet::icmp::{};
+use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::transport::TransportSender;
-use pnet::packet::icmp::{echo_request};
+use pnet::packet::icmp::{echo_request, IcmpTypes};
 use pnet::packet::icmpv6::{Icmpv6Types, MutableIcmpv6Packet};
+use pnet::packet::ipv4::{checksum, Ipv4Packet, MutableIpv4Packet};
 use pnet::util;
 use pnet_macros_support::types::*;
 use pnet::packet::Packet;
@@ -13,13 +15,15 @@ use std::sync::mpsc::{ Sender, Receiver};
 use std::sync::{Arc, Mutex, RwLock};
 use ::PingResult;
 
+const IPV4_HEADER_LEN: usize = 20;
+
 fn send_echo(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io::Error> {
     // Allocate enough space for a new packet
-    let mut vec: Vec<u8> = vec![0; 16];
+    let mut icmp_vec: Vec<u8> = vec![0; 16];
 
 
     // Use echo_request so we can set the identifier and sequence number
-    let mut echo_packet = echo_request::MutableEchoRequestPacket::new(&mut vec[..]).unwrap();
+    let mut echo_packet = echo_request::MutableEchoRequestPacket::new(&mut icmp_vec[..]).unwrap();
     echo_packet.set_sequence_number(random::<u16>());
     echo_packet.set_identifier(random::<u16>());
     echo_packet.set_icmp_type(IcmpTypes::EchoRequest);
@@ -27,7 +31,23 @@ fn send_echo(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io::E
     let csum = icmp_checksum(&echo_packet);
     echo_packet.set_checksum(csum);
 
-    tx.send_to(echo_packet, addr)
+    let mut ip_vec: Vec<u8> = vec![0; 64];
+    let mut packet = MutableIpv4Packet::new(&mut ip_vec).unwrap();
+    packet.set_total_length(echo_packet.packet().len() as u16 + IPV4_HEADER_LEN as u16);
+    packet.set_version(4);
+    packet.set_ttl(225);
+    packet.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
+    packet.set_payload(&echo_packet.packet());
+
+    match addr {
+        IpAddr::V4(ip4) => packet.set_destination(ip4),
+        IpAddr::V6(ip6) => error!("Wrong addr type"),
+    }
+
+    packet.set_header_length(5);
+    packet.set_checksum(checksum(&packet.to_immutable()));
+
+    tx.send_to(packet, addr)
 }
 
 fn send_echov6(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io::Error> {
