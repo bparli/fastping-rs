@@ -7,7 +7,7 @@ extern crate rand;
 mod ping;
 
 use pnet::packet::ip::IpNextHeaderProtocols;
-use pnet::transport::{icmp_packet_iter, icmpv6_packet_iter};
+use pnet::transport::{ipv4_packet_iter, icmpv6_packet_iter};
 use pnet::transport::transport_channel;
 use pnet::transport::{TransportSender, TransportReceiver};
 use pnet::transport::TransportChannelType::Layer3;
@@ -190,7 +190,7 @@ impl Pinger {
     }
 
     fn start_listener(&self) {
-        // start icmp listeners in the background and use internal channels for results
+        // start listeners in the background and use internal channels for results
 
         // setup ipv4 listener
         let thread_tx = self.thread_tx.clone();
@@ -200,18 +200,23 @@ impl Pinger {
 
         thread::spawn(move || {
             let mut receiver = rx.lock().unwrap();
-            let mut iter = icmp_packet_iter(&mut receiver);
+            let mut iter = ipv4_packet_iter(&mut receiver);
             loop {
                 match iter.next() {
-                    Ok((_, addr)) => {
+                    Ok((ip4, addr)) => {
                         let start_time = timer.read().unwrap();
-                        match thread_tx.send(PingResult::Receive{addr: addr, rtt: Instant::now().duration_since(*start_time)}) {
-                            Ok(_) => {},
-                            Err(e) => {
-                                if !*stop.lock().unwrap() {
-                                    error!("Error sending ping result on channel: {}", e)
+                        match ip4.get_next_level_protocol() {
+                            IpNextHeaderProtocols::Icmp => {
+                                match thread_tx.send(PingResult::Receive{addr: addr, rtt: Instant::now().duration_since(*start_time)}) {
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        if !*stop.lock().unwrap() {
+                                            error!("Error sending ping result on channel: {}", e)
+                                        }
+                                    }
                                 }
-                            }
+                            },
+                            _ => {},
                         }
                     },
                     Err(e) => {
