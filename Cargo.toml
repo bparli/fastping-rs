@@ -1,6 +1,6 @@
 [package]
 name = "fastping-rs"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["bparli <bparli@gmail.com>"]
 license = "MIT"
 homepage = "https://github.com/bparli/fastping-rs"
@@ -11,6 +11,5 @@ readme = "README.md"
 [dependencies]
 pnet = "0.23.0"
 pnet_macros_support = "0.23.0"
-env_logger = "0.5.13"
-log = "0.4.5"
-rand = "0.4"
+log = "0.4"
+rand = "0.7"
