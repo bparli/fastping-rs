@@ -20,7 +20,7 @@ fn main() {
         Ok((pinger, results)) => (pinger, results),
         Err(e) => panic!("Error creating pinger: {}", e)
     };
-    
+
     pinger.add_ipaddr("8.8.8.8");
     pinger.add_ipaddr("1.1.1.1");
     pinger.add_ipaddr("7.7.7.7");
@@ -48,3 +48,8 @@ fn main() {
 Note a Pinger is initialized with two arguments: the maximum round trip time before an address is considered "idle" (2 seconds by default) and the size of the ping data packet (16 bytes by default).  To explicitly set these values Pinger would be initialized like so: ```Pinger::new(Some(3000 as u64), Some(24 as i32))```
 
 The public functions ```stop_pinger()``` to stop the continuous pinger and ```ping_once()``` to only run one round of pinging are also available.
+
+## Additional Notes
+This library requires the ability to create raw sockets.  Either explicitly set for your program (```sudo setcap cap_net_raw=eip /usr/bin/testping``` for example) or run as root.
+
+Only supported on linux and osx for now (Windows will likely not work).  
