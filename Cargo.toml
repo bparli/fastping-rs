@@ -9,7 +9,7 @@ description = " ICMP ping library for quickly sending and measuring batches of I
 readme = "README.md"
 
 [dependencies]
-pnet = "0.23.0"
-pnet_macros_support = "0.23.0"
+pnet = "0.26"
+pnet_macros_support = "0.26"
 log = "0.4"
 rand = "0.7"
