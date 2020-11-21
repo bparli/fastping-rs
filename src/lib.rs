@@ -8,6 +8,7 @@ mod ping;
 
 use ping::send_pings;
 use pnet::packet::ip::IpNextHeaderProtocols;
+use pnet::packet::{icmp, icmpv6};
 use pnet::transport::transport_channel;
 use pnet::transport::TransportChannelType::Layer4;
 use pnet::transport::TransportProtocol::{Ipv4, Ipv6};
@@ -220,18 +221,25 @@ impl Pinger {
             let mut iter = icmp_packet_iter(&mut receiver);
             loop {
                 match iter.next() {
-                    Ok((_, addr)) => {
-                        let start_time = timer.read().unwrap();
-                        match thread_tx.send(PingResult::Receive {
-                            addr: addr,
-                            rtt: Instant::now().duration_since(*start_time),
-                        }) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                if !*stop.lock().unwrap() {
-                                    error!("Error sending ping result on channel: {}", e)
+                    Ok((packet, addr)) => {
+                        if packet.get_icmp_type() == icmp::IcmpType::new(0) {
+                            let start_time = timer.read().unwrap();
+                            match thread_tx.send(PingResult::Receive {
+                                addr: addr,
+                                rtt: Instant::now().duration_since(*start_time),
+                            }) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    if !*stop.lock().unwrap() {
+                                        error!("Error sending ping result on channel: {}", e)
+                                    }
                                 }
                             }
+                        } else {
+                            debug!(
+                                "ICMP type other than reply (0) received: {:?}",
+                                packet.get_icmp_type()
+                            );
                         }
                     }
                     Err(e) => {
@@ -252,18 +260,25 @@ impl Pinger {
             let mut iter = icmpv6_packet_iter(&mut receiver);
             loop {
                 match iter.next() {
-                    Ok((_, addr)) => {
-                        let start_time = timerv6.read().unwrap();
-                        match thread_txv6.send(PingResult::Receive {
-                            addr: addr,
-                            rtt: Instant::now().duration_since(*start_time),
-                        }) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                if !*stopv6.lock().unwrap() {
-                                    error!("Error sending ping result on channel: {}", e)
+                    Ok((packet, addr)) => {
+                        if packet.get_icmpv6_type() == icmpv6::Icmpv6Type::new(129) {
+                            let start_time = timerv6.read().unwrap();
+                            match thread_txv6.send(PingResult::Receive {
+                                addr: addr,
+                                rtt: Instant::now().duration_since(*start_time),
+                            }) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    if !*stopv6.lock().unwrap() {
+                                        error!("Error sending ping result on channel: {}", e)
+                                    }
                                 }
                             }
+                        } else {
+                            debug!(
+                                "ICMP type other than reply (129) received: {:?}",
+                                packet.get_icmpv6_type()
+                            );
                         }
                     }
                     Err(e) => {
