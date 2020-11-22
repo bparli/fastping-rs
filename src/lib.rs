@@ -237,7 +237,8 @@ impl Pinger {
                             }
                         } else {
                             debug!(
-                                "ICMP type other than reply (0) received: {:?}",
+                                "ICMP type other than reply (0) received from {:?}: {:?}",
+                                addr,
                                 packet.get_icmp_type()
                             );
                         }
@@ -276,7 +277,8 @@ impl Pinger {
                             }
                         } else {
                             debug!(
-                                "ICMP type other than reply (129) received: {:?}",
+                                "ICMP type other than reply (129) received from {:?}: {:?}",
+                                addr,
                                 packet.get_icmpv6_type()
                             );
                         }
