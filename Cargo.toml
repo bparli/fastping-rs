@@ -13,3 +13,9 @@ pnet = "0.26"
 pnet_macros_support = "0.26"
 log = "0.4"
 rand = "0.7"
+
+[dev-dependencies]
+pretty_env_logger = "0.4"
+
+[[example]]
+name = "ping"

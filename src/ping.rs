@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use PingResult;
 
-fn send_echo(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io::Error> {
+fn send_echo(tx: &mut TransportSender, addr: IpAddr, size: usize) -> Result<usize, std::io::Error> {
     // Allocate enough space for a new packet
-    let mut vec: Vec<u8> = vec![0; 16];
+    let mut vec: Vec<u8> = vec![0; size];
 
     // Use echo_request so we can set the identifier and sequence number
     let mut echo_packet = echo_request::MutableEchoRequestPacket::new(&mut vec[..]).unwrap();
@@ -29,9 +29,13 @@ fn send_echo(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io::E
     tx.send_to(echo_packet, addr)
 }
 
-fn send_echov6(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io::Error> {
+fn send_echov6(
+    tx: &mut TransportSender,
+    addr: IpAddr,
+    size: usize,
+) -> Result<usize, std::io::Error> {
     // Allocate enough space for a new packet
-    let mut vec: Vec<u8> = vec![0; 16];
+    let mut vec: Vec<u8> = vec![0; size];
 
     // Use echo_request so we can set the identifier and sequence number
     let mut echo_packet = MutableIcmpv6Packet::new(&mut vec[..]).unwrap();
@@ -44,6 +48,7 @@ fn send_echov6(tx: &mut TransportSender, addr: IpAddr) -> Result<usize, std::io:
 }
 
 pub fn send_pings(
+    size: usize,
     timer: Arc<RwLock<Instant>>,
     stop: Arc<Mutex<bool>>,
     results_sender: Sender<PingResult>,
@@ -56,9 +61,9 @@ pub fn send_pings(
     loop {
         for (addr, seen) in addrs.lock().unwrap().iter_mut() {
             match if addr.is_ipv4() {
-                send_echo(&mut tx.lock().unwrap(), *addr)
+                send_echo(&mut tx.lock().unwrap(), *addr, size)
             } else if addr.is_ipv6() {
-                send_echov6(&mut txv6.lock().unwrap(), *addr)
+                send_echov6(&mut txv6.lock().unwrap(), *addr, size)
             } else {
                 Ok(0)
             } {

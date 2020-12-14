@@ -40,7 +40,7 @@ pub struct Pinger {
     addrs: Arc<Mutex<BTreeMap<IpAddr, bool>>>,
 
     // Size in bytes of the payload to send.  Default is 16 bytes
-    size: i32,
+    size: usize,
 
     // sender end of the channel for piping results to client
     results_sender: Sender<PingResult>,
@@ -72,7 +72,7 @@ pub struct Pinger {
 
 impl Pinger {
     // initialize the pinger and start the icmp and icmpv6 listeners
-    pub fn new(_max_rtt: Option<u64>, _size: Option<i32>) -> NewPingerResult {
+    pub fn new(_max_rtt: Option<u64>, _size: Option<usize>) -> NewPingerResult {
         let addrs = BTreeMap::new();
         let (sender, receiver) = channel();
 
@@ -93,14 +93,14 @@ impl Pinger {
         let mut pinger = Pinger {
             max_rtt: Arc::new(Duration::from_millis(2000)),
             addrs: Arc::new(Mutex::new(addrs)),
-            size: 16,
+            size: _size.unwrap_or(16),
             results_sender: sender,
             tx: Arc::new(Mutex::new(tx)),
             rx: Arc::new(Mutex::new(rx)),
             txv6: Arc::new(Mutex::new(txv6)),
             rxv6: Arc::new(Mutex::new(rxv6)),
             thread_rx: Arc::new(Mutex::new(thread_rx)),
-            thread_tx: thread_tx,
+            thread_tx,
             timer: Arc::new(RwLock::new(Instant::now())),
             stop: Arc::new(Mutex::new(false)),
         };
@@ -169,6 +169,7 @@ impl Pinger {
         let addrs = self.addrs.clone();
         let timer = self.timer.clone();
         let max_rtt = self.max_rtt.clone();
+        let size = self.size;
 
         {
             let mut stop = self.stop.lock().unwrap();
@@ -182,6 +183,7 @@ impl Pinger {
 
         if run_once {
             send_pings(
+                size,
                 timer,
                 stop,
                 results_sender,
@@ -194,6 +196,7 @@ impl Pinger {
         } else {
             thread::spawn(move || {
                 send_pings(
+                    size,
                     timer,
                     stop,
                     results_sender,
@@ -301,10 +304,10 @@ mod tests {
         // test we can create a new pinger with optional arguments,
         // test it returns the new pinger and a client channel
         // test we can use the client channel
-        match Pinger::new(Some(3000 as u64), Some(24 as i32)) {
+        match Pinger::new(Some(3000 as u64), Some(24)) {
             Ok((test_pinger, test_channel)) => {
                 assert_eq!(test_pinger.max_rtt, Arc::new(Duration::new(3, 0)));
-                assert_eq!(test_pinger.size, 24 as i32);
+                assert_eq!(test_pinger.size, 24);
 
                 match test_pinger.results_sender.send(PingResult::Idle {
                     addr: "127.0.0.1".parse::<IpAddr>().unwrap(),
@@ -390,9 +393,9 @@ mod tests {
                                 assert_eq!("7.7.7.7".parse::<IpAddr>().unwrap(), addr);
                             }
                             PingResult::Receive { addr, rtt: _ } => {
-                                if addr == "::1".parse::<IpAddr>().unwrap() {
-                                    assert!(true)
-                                } else if addr == "127.0.0.1".parse::<IpAddr>().unwrap() {
+                                if addr == "::1".parse::<IpAddr>().unwrap()
+                                    || addr == "127.0.0.1".parse::<IpAddr>().unwrap()
+                                {
                                     assert!(true)
                                 } else {
                                     assert!(false)
