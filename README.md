@@ -19,7 +19,7 @@ Add some crate to your dependencies:
 ```toml
 log = "0.4"
 pretty_env_logger = "0.4"
-fastping-rs = "0.1"
+fastping-rs = "0.2"
 ```
 
 And then get started in your `main.rs`:
