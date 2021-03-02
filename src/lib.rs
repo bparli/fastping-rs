@@ -235,6 +235,8 @@ impl Pinger {
                                 Err(e) => {
                                     if !*stop.lock().unwrap() {
                                         error!("Error sending ping result on channel: {}", e)
+                                    } else {
+                                        return;
                                     }
                                 }
                             }
@@ -275,6 +277,8 @@ impl Pinger {
                                 Err(e) => {
                                     if !*stopv6.lock().unwrap() {
                                         error!("Error sending ping result on channel: {}", e)
+                                    } else {
+                                        return;
                                     }
                                 }
                             }
