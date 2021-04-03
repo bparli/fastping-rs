@@ -53,17 +53,27 @@ pub fn send_pings(
     stop: Arc<Mutex<bool>>,
     results_sender: Sender<PingResult>,
     thread_rx: Arc<Mutex<Receiver<PingResult>>>,
-    tx: Arc<Mutex<TransportSender>>,
-    txv6: Arc<Mutex<TransportSender>>,
+    tx: Option<Arc<Mutex<TransportSender>>>,
+    txv6: Option<Arc<Mutex<TransportSender>>>,
     addrs: Arc<Mutex<BTreeMap<IpAddr, bool>>>,
     max_rtt: Arc<Duration>,
 ) {
     loop {
         for (addr, seen) in addrs.lock().unwrap().iter_mut() {
             match if addr.is_ipv4() {
-                send_echo(&mut tx.lock().unwrap(), *addr, size)
+                if let Some(ref tx) = tx {
+                    send_echo(&mut tx.lock().unwrap(), *addr, size)
+                } else {
+                    error!("Tried to ping IPV4 address {}, but IPV4 pinger is not enabled", addr);
+                    Ok(0)
+                }
             } else if addr.is_ipv6() {
-                send_echov6(&mut txv6.lock().unwrap(), *addr, size)
+                if let Some(ref txv6) = txv6 {
+                    send_echov6(&mut txv6.lock().unwrap(), *addr, size)
+                } else {
+                    error!("Tried to ping IPV6 address {}, but IPV6 pinger is not enabled", addr);
+                    Ok(0)
+                }
             } else {
                 Ok(0)
             } {

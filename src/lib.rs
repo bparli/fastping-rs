@@ -46,16 +46,16 @@ pub struct Pinger {
     results_sender: Sender<PingResult>,
 
     // sender end of libpnet icmp v4 transport channel
-    tx: Arc<Mutex<TransportSender>>,
+    tx: Option<Arc<Mutex<TransportSender>>>,
 
     // receiver end of libpnet icmp v4 transport channel
-    rx: Arc<Mutex<TransportReceiver>>,
+    rx: Option<Arc<Mutex<TransportReceiver>>>,
 
     // sender end of libpnet icmp v6 transport channel
-    txv6: Arc<Mutex<TransportSender>>,
+    txv6: Option<Arc<Mutex<TransportSender>>>,
 
     // receiver end of libpnet icmp v6 transport channel
-    rxv6: Arc<Mutex<TransportReceiver>>,
+    rxv6: Option<Arc<Mutex<TransportReceiver>>>,
 
     // sender for internal result passing beween threads
     thread_tx: Sender<PingResult>,
@@ -78,14 +78,22 @@ impl Pinger {
 
         let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
         let (tx, rx) = match transport_channel(4096, protocol) {
-            Ok((tx, rx)) => (tx, rx),
-            Err(e) => return Err(e.to_string()),
+            Ok((tx, rx)) => (Some(Arc::new(Mutex::new(tx))), Some(Arc::new(Mutex::new(rx)))),
+            Err(e) => {
+                warn!("Unable to create IPV4 ICMP socket: {}. Skipping IPV4 pinger setup", e.to_string());
+                (None, None)
+            }
         };
 
         let protocolv6 = Layer4(Ipv6(IpNextHeaderProtocols::Icmpv6));
         let (txv6, rxv6) = match transport_channel(4096, protocolv6) {
-            Ok((txv6, rxv6)) => (txv6, rxv6),
-            Err(e) => return Err(e.to_string()),
+            Ok((txv6, rxv6)) => {
+                (Some(Arc::new(Mutex::new(txv6))), Some(Arc::new(Mutex::new(rxv6))))
+            }
+            Err(e) => {
+                warn!("Unable to create IPV6 ICMP sockets: {}. Skipping IPV6 pinger setup", e.to_string());
+                (None, None)
+            }
         };
 
         let (thread_tx, thread_rx) = channel();
@@ -95,10 +103,10 @@ impl Pinger {
             addrs: Arc::new(Mutex::new(addrs)),
             size: _size.unwrap_or(16),
             results_sender: sender,
-            tx: Arc::new(Mutex::new(tx)),
-            rx: Arc::new(Mutex::new(rx)),
-            txv6: Arc::new(Mutex::new(txv6)),
-            rxv6: Arc::new(Mutex::new(rxv6)),
+            tx: tx,
+            rx: rx,
+            txv6: txv6,
+            rxv6: rxv6,
             thread_rx: Arc::new(Mutex::new(thread_rx)),
             thread_tx,
             timer: Arc::new(RwLock::new(Instant::now())),
@@ -220,36 +228,38 @@ impl Pinger {
         let stop = self.stop.clone();
 
         thread::spawn(move || {
-            let mut receiver = rx.lock().unwrap();
-            let mut iter = icmp_packet_iter(&mut receiver);
-            loop {
-                match iter.next() {
-                    Ok((packet, addr)) => {
-                        if packet.get_icmp_type() == icmp::IcmpType::new(0) {
-                            let start_time = timer.read().unwrap();
-                            match thread_tx.send(PingResult::Receive {
-                                addr: addr,
-                                rtt: Instant::now().duration_since(*start_time),
-                            }) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    if !*stop.lock().unwrap() {
-                                        error!("Error sending ping result on channel: {}", e)
-                                    } else {
-                                        return;
+            if let Some(rx) = rx {
+                let mut receiver = rx.lock().unwrap();
+                let mut iter = icmp_packet_iter(&mut receiver);
+                loop {
+                    match iter.next() {
+                        Ok((packet, addr)) => {
+                            if packet.get_icmp_type() == icmp::IcmpType::new(0) {
+                                let start_time = timer.read().unwrap();
+                                match thread_tx.send(PingResult::Receive {
+                                    addr: addr,
+                                    rtt: Instant::now().duration_since(*start_time),
+                                }) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        if !*stop.lock().unwrap() {
+                                            error!("Error sending ping result on channel: {}", e)
+                                        } else {
+                                            return;
+                                        }
                                     }
                                 }
+                            } else {
+                                debug!(
+                                    "ICMP type other than reply (0) received from {:?}: {:?}",
+                                    addr,
+                                    packet.get_icmp_type()
+                                );
                             }
-                        } else {
-                            debug!(
-                                "ICMP type other than reply (0) received from {:?}: {:?}",
-                                addr,
-                                packet.get_icmp_type()
-                            );
                         }
-                    }
-                    Err(e) => {
-                        error!("An error occurred while reading: {}", e);
+                        Err(e) => {
+                            error!("An error occurred while reading: {}", e);
+                        }
                     }
                 }
             }
@@ -262,36 +272,38 @@ impl Pinger {
         let stopv6 = self.stop.clone();
 
         thread::spawn(move || {
-            let mut receiver = rxv6.lock().unwrap();
-            let mut iter = icmpv6_packet_iter(&mut receiver);
-            loop {
-                match iter.next() {
-                    Ok((packet, addr)) => {
-                        if packet.get_icmpv6_type() == icmpv6::Icmpv6Type::new(129) {
-                            let start_time = timerv6.read().unwrap();
-                            match thread_txv6.send(PingResult::Receive {
-                                addr: addr,
-                                rtt: Instant::now().duration_since(*start_time),
-                            }) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    if !*stopv6.lock().unwrap() {
-                                        error!("Error sending ping result on channel: {}", e)
-                                    } else {
-                                        return;
+            if let Some(rxv6) = rxv6 {
+                let mut receiver = rxv6.lock().unwrap();
+                let mut iter = icmpv6_packet_iter(&mut receiver);
+                loop {
+                    match iter.next() {
+                        Ok((packet, addr)) => {
+                            if packet.get_icmpv6_type() == icmpv6::Icmpv6Type::new(129) {
+                                let start_time = timerv6.read().unwrap();
+                                match thread_txv6.send(PingResult::Receive {
+                                    addr: addr,
+                                    rtt: Instant::now().duration_since(*start_time),
+                                }) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        if !*stopv6.lock().unwrap() {
+                                            error!("Error sending ping result on channel: {}", e)
+                                        } else {
+                                            return;
+                                        }
                                     }
                                 }
+                            } else {
+                                debug!(
+                                    "ICMP type other than reply (129) received from {:?}: {:?}",
+                                    addr,
+                                    packet.get_icmpv6_type()
+                                );
                             }
-                        } else {
-                            debug!(
-                                "ICMP type other than reply (129) received from {:?}: {:?}",
-                                addr,
-                                packet.get_icmpv6_type()
-                            );
                         }
-                    }
-                    Err(e) => {
-                        error!("An error occurred while reading: {}", e);
+                        Err(e) => {
+                            error!("An error occurred while reading: {}", e);
+                        }
                     }
                 }
             }
