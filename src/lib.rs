@@ -78,20 +78,30 @@ impl Pinger {
 
         let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
         let (tx, rx) = match transport_channel(4096, protocol) {
-            Ok((tx, rx)) => (Some(Arc::new(Mutex::new(tx))), Some(Arc::new(Mutex::new(rx)))),
+            Ok((tx, rx)) => (
+                Some(Arc::new(Mutex::new(tx))),
+                Some(Arc::new(Mutex::new(rx))),
+            ),
             Err(e) => {
-                warn!("Unable to create IPV4 ICMP socket: {}. Skipping IPV4 pinger setup", e.to_string());
+                warn!(
+                    "Unable to create IPV4 ICMP socket: {}. Skipping IPV4 pinger setup",
+                    e.to_string()
+                );
                 (None, None)
             }
         };
 
         let protocolv6 = Layer4(Ipv6(IpNextHeaderProtocols::Icmpv6));
         let (txv6, rxv6) = match transport_channel(4096, protocolv6) {
-            Ok((txv6, rxv6)) => {
-                (Some(Arc::new(Mutex::new(txv6))), Some(Arc::new(Mutex::new(rxv6))))
-            }
+            Ok((txv6, rxv6)) => (
+                Some(Arc::new(Mutex::new(txv6))),
+                Some(Arc::new(Mutex::new(rxv6))),
+            ),
             Err(e) => {
-                warn!("Unable to create IPV6 ICMP sockets: {}. Skipping IPV6 pinger setup", e.to_string());
+                warn!(
+                    "Unable to create IPV6 ICMP sockets: {}. Skipping IPV6 pinger setup",
+                    e.to_string()
+                );
                 (None, None)
             }
         };

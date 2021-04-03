@@ -64,14 +64,20 @@ pub fn send_pings(
                 if let Some(ref tx) = tx {
                     send_echo(&mut tx.lock().unwrap(), *addr, size)
                 } else {
-                    error!("Tried to ping IPV4 address {}, but IPV4 pinger is not enabled", addr);
+                    error!(
+                        "Tried to ping IPV4 address {}, but IPV4 pinger is not enabled",
+                        addr
+                    );
                     Ok(0)
                 }
             } else if addr.is_ipv6() {
                 if let Some(ref txv6) = txv6 {
                     send_echov6(&mut txv6.lock().unwrap(), *addr, size)
                 } else {
-                    error!("Tried to ping IPV6 address {}, but IPV6 pinger is not enabled", addr);
+                    error!(
+                        "Tried to ping IPV6 address {}, but IPV6 pinger is not enabled",
+                        addr
+                    );
                     Ok(0)
                 }
             } else {
