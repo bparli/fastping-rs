@@ -1,6 +1,6 @@
 [package]
 name = "fastping-rs"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["bparli <bparli@gmail.com>"]
 license = "MIT"
 homepage = "https://github.com/bparli/fastping-rs"
@@ -9,8 +9,8 @@ description = " ICMP ping library for quickly sending and measuring batches of I
 readme = "README.md"
 
 [dependencies]
-pnet = "0.27"
-pnet_macros_support = "0.27"
+pnet = "0.28"
+pnet_macros_support = "0.28"
 log = "0.4"
 rand = "0.8"
 
