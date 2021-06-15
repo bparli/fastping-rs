@@ -406,11 +406,10 @@ mod tests {
                             PingResult::Idle { addr } => {
                                 assert_eq!("7.7.7.7".parse::<IpAddr>().unwrap(), addr);
                             }
-                            PingResult::Receive {
-                                addr,
-                                rtt: _,
-                            } => {
-                                if addr == "::1".parse::<IpAddr>().unwrap() || addr == "127.0.0.1".parse::<IpAddr>().unwrap() {
+                            PingResult::Receive { addr, rtt: _ } => {
+                                if addr == "::1".parse::<IpAddr>().unwrap()
+                                    || addr == "127.0.0.1".parse::<IpAddr>().unwrap()
+                                {
                                     assert!(true)
                                 } else {
                                     assert!(false)
