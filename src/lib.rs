@@ -408,23 +408,9 @@ mod tests {
                             }
                             PingResult::Receive {
                                 addr,
-                                identifier: _,
-                                sequence_number: 0,
                                 rtt: _,
                             } => {
-                                if addr == "::1".parse::<IpAddr>().unwrap() {
-                                    assert!(true)
-                                } else {
-                                    assert!(false)
-                                }
-                            }
-                            PingResult::Receive {
-                                addr,
-                                identifier: _,
-                                sequence_number: 1,
-                                rtt: _,
-                            } => {
-                                if addr == "127.0.0.1".parse::<IpAddr>().unwrap() {
+                                if addr == "::1".parse::<IpAddr>().unwrap() || addr == "127.0.0.1".parse::<IpAddr>().unwrap() {
                                     assert!(true)
                                 } else {
                                     assert!(false)
