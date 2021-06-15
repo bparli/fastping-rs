@@ -13,20 +13,70 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use PingResult;
 
-fn send_echo(tx: &mut TransportSender, addr: IpAddr, size: usize) -> Result<usize, std::io::Error> {
+pub struct Ping {
+    addr: IpAddr,
+    identifier: u16,
+    sequence_number: u16,
+    pub seen: bool,
+}
+
+pub struct ReceivedPing {
+    pub addr: IpAddr,
+    pub identifier: u16,
+    pub sequence_number: u16,
+    pub rtt: Duration,
+}
+
+impl Ping {
+    pub fn new(addr: IpAddr) -> Ping {
+        let mut identifier = 0;
+        if addr.is_ipv4() {
+            identifier = random::<u16>();
+        }
+        Ping {
+            addr,
+            identifier,
+            sequence_number: 0,
+            seen: false,
+        }
+    }
+
+    pub fn get_addr(&self) -> IpAddr {
+        return self.addr;
+    }
+
+    pub fn get_identifier(&self) -> u16 {
+        return self.identifier;
+    }
+
+    pub fn get_sequence_number(&self) -> u16 {
+        return self.sequence_number;
+    }
+
+    pub fn increment_sequence_number(&mut self) -> u16 {
+        self.sequence_number += 1;
+        return self.sequence_number;
+    }
+}
+
+fn send_echo(
+    tx: &mut TransportSender,
+    ping: &mut Ping,
+    size: usize,
+) -> Result<usize, std::io::Error> {
     // Allocate enough space for a new packet
     let mut vec: Vec<u8> = vec![0; size];
 
     // Use echo_request so we can set the identifier and sequence number
     let mut echo_packet = echo_request::MutableEchoRequestPacket::new(&mut vec[..]).unwrap();
-    echo_packet.set_sequence_number(random::<u16>());
-    echo_packet.set_identifier(random::<u16>());
+    echo_packet.set_sequence_number(ping.increment_sequence_number());
+    echo_packet.set_identifier(ping.get_identifier());
     echo_packet.set_icmp_type(IcmpTypes::EchoRequest);
 
     let csum = icmp_checksum(&echo_packet);
     echo_packet.set_checksum(csum);
 
-    tx.send_to(echo_packet, addr)
+    tx.send_to(echo_packet, ping.get_addr())
 }
 
 fn send_echov6(
@@ -37,7 +87,6 @@ fn send_echov6(
     // Allocate enough space for a new packet
     let mut vec: Vec<u8> = vec![0; size];
 
-    // Use echo_request so we can set the identifier and sequence number
     let mut echo_packet = MutableIcmpv6Packet::new(&mut vec[..]).unwrap();
     echo_packet.set_icmpv6_type(Icmpv6Types::EchoRequest);
 
@@ -52,16 +101,16 @@ pub fn send_pings(
     timer: Arc<RwLock<Instant>>,
     stop: Arc<Mutex<bool>>,
     results_sender: Sender<PingResult>,
-    thread_rx: Arc<Mutex<Receiver<PingResult>>>,
+    thread_rx: Arc<Mutex<Receiver<ReceivedPing>>>,
     tx: Arc<Mutex<TransportSender>>,
     txv6: Arc<Mutex<TransportSender>>,
-    addrs: Arc<Mutex<BTreeMap<IpAddr, bool>>>,
+    targets: Arc<Mutex<BTreeMap<IpAddr, Ping>>>,
     max_rtt: Arc<Duration>,
 ) {
     loop {
-        for (addr, seen) in addrs.lock().unwrap().iter_mut() {
+        for (addr, ping) in targets.lock().unwrap().iter_mut() {
             match if addr.is_ipv4() {
-                send_echo(&mut tx.lock().unwrap(), *addr, size)
+                send_echo(&mut tx.lock().unwrap(), ping, size)
             } else if addr.is_ipv6() {
                 send_echov6(&mut txv6.lock().unwrap(), *addr, size)
             } else {
@@ -70,7 +119,7 @@ pub fn send_pings(
                 Err(e) => error!("Failed to send ping to {:?}: {}", *addr, e),
                 _ => {}
             }
-            *seen = false;
+            ping.seen = false;
         }
         {
             // start the timer
@@ -84,20 +133,37 @@ pub fn send_pings(
                 .unwrap()
                 .recv_timeout(Duration::from_millis(100))
             {
-                Ok(result) => {
-                    match result {
-                        PingResult::Receive { addr, rtt: _ } => {
+                Ok(ping_result) => {
+                    match ping_result {
+                        ReceivedPing {
+                            addr,
+                            identifier,
+                            sequence_number,
+                            rtt: _,
+                        } => {
                             // Update the address to the ping response being received
-                            if let Some(seen) = addrs.lock().unwrap().get_mut(&addr) {
-                                *seen = true;
-                                // Send the ping result over the client channel
-                                match results_sender.send(result) {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        if !*stop.lock().unwrap() {
-                                            error!("Error sending ping result on channel: {}", e)
+                            if let Some(ping) = targets.lock().unwrap().get_mut(&addr) {
+                                if ping.get_identifier() == identifier
+                                    && ping.get_sequence_number() == sequence_number
+                                {
+                                    ping.seen = true;
+                                    // Send the ping result over the client channel
+                                    match results_sender.send(PingResult::Receive {
+                                        addr: ping_result.addr,
+                                        rtt: ping_result.rtt,
+                                    }) {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            if !*stop.lock().unwrap() {
+                                                error!(
+                                                    "Error sending ping result on channel: {}",
+                                                    e
+                                                )
+                                            }
                                         }
                                     }
+                                } else {
+                                    debug!("Received echo reply from target {}, but sequence_number (expected {} but got {}) and identifier (expected {} but got {}) don't match", addr, ping.get_sequence_number(), sequence_number, ping.get_identifier(), identifier);
                                 }
                             }
                         }
@@ -114,8 +180,8 @@ pub fn send_pings(
             }
         }
         // check for addresses which haven't replied
-        for (addr, seen) in addrs.lock().unwrap().iter() {
-            if *seen == false {
+        for (addr, ping) in targets.lock().unwrap().iter() {
+            if ping.seen == false {
                 // Send the ping Idle over the client channel
                 match results_sender.send(PingResult::Idle { addr: *addr }) {
                     Ok(_) => {}
@@ -140,4 +206,19 @@ fn icmp_checksum(packet: &echo_request::MutableEchoRequestPacket) -> u16be {
 
 fn icmpv6_checksum(packet: &MutableIcmpv6Packet) -> u16be {
     util::checksum(packet.packet(), 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ping() {
+        let mut p = Ping::new("127.0.0.1".parse::<IpAddr>().unwrap());
+        assert_eq!(p.get_sequence_number(), 0);
+        assert!(p.get_identifier() > 0);
+
+        p.increment_sequence_number();
+        assert_eq!(p.get_sequence_number(), 1);
+    }
 }

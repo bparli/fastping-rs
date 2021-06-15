@@ -6,8 +6,10 @@ extern crate rand;
 
 mod ping;
 
-use ping::send_pings;
+use ping::{send_pings, Ping, ReceivedPing};
+use pnet::packet::icmp::echo_reply::EchoReplyPacket;
 use pnet::packet::ip::IpNextHeaderProtocols;
+use pnet::packet::Packet;
 use pnet::packet::{icmp, icmpv6};
 use pnet::transport::transport_channel;
 use pnet::transport::TransportChannelType::Layer4;
@@ -37,7 +39,7 @@ pub struct Pinger {
     max_rtt: Arc<Duration>,
 
     // map of addresses to ping on each run
-    addrs: Arc<Mutex<BTreeMap<IpAddr, bool>>>,
+    targets: Arc<Mutex<BTreeMap<IpAddr, Ping>>>,
 
     // Size in bytes of the payload to send.  Default is 16 bytes
     size: usize,
@@ -58,10 +60,10 @@ pub struct Pinger {
     rxv6: Arc<Mutex<TransportReceiver>>,
 
     // sender for internal result passing beween threads
-    thread_tx: Sender<PingResult>,
+    thread_tx: Sender<ReceivedPing>,
 
     // receiver for internal result passing beween threads
-    thread_rx: Arc<Mutex<Receiver<PingResult>>>,
+    thread_rx: Arc<Mutex<Receiver<ReceivedPing>>>,
 
     // timer for tracking round trip times
     timer: Arc<RwLock<Instant>>,
@@ -73,7 +75,7 @@ pub struct Pinger {
 impl Pinger {
     // initialize the pinger and start the icmp and icmpv6 listeners
     pub fn new(_max_rtt: Option<u64>, _size: Option<usize>) -> NewPingerResult {
-        let addrs = BTreeMap::new();
+        let targets = BTreeMap::new();
         let (sender, receiver) = channel();
 
         let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
@@ -92,7 +94,7 @@ impl Pinger {
 
         let mut pinger = Pinger {
             max_rtt: Arc::new(Duration::from_millis(2000)),
-            addrs: Arc::new(Mutex::new(addrs)),
+            targets: Arc::new(Mutex::new(targets)),
             size: _size.unwrap_or(16),
             results_sender: sender,
             tx: Arc::new(Mutex::new(tx)),
@@ -121,7 +123,8 @@ impl Pinger {
         match addr {
             Ok(valid_addr) => {
                 debug!("Address added {}", valid_addr);
-                self.addrs.lock().unwrap().insert(valid_addr, true);
+                let new_ping = Ping::new(valid_addr);
+                self.targets.lock().unwrap().insert(valid_addr, new_ping);
             }
             Err(e) => {
                 error!("Error adding ip address {}. Error: {}", ipaddr, e);
@@ -135,7 +138,7 @@ impl Pinger {
         match addr {
             Ok(valid_addr) => {
                 debug!("Address removed {}", valid_addr);
-                self.addrs.lock().unwrap().remove(&valid_addr);
+                self.targets.lock().unwrap().remove(&valid_addr);
             }
             Err(e) => {
                 error!("Error removing ip address {}. Error: {}", ipaddr, e);
@@ -166,7 +169,7 @@ impl Pinger {
         let txv6 = self.txv6.clone();
         let results_sender = self.results_sender.clone();
         let stop = self.stop.clone();
-        let addrs = self.addrs.clone();
+        let targets = self.targets.clone();
         let timer = self.timer.clone();
         let max_rtt = self.max_rtt.clone();
         let size = self.size;
@@ -190,7 +193,7 @@ impl Pinger {
                 thread_rx,
                 tx,
                 txv6,
-                addrs,
+                targets,
                 max_rtt,
             );
         } else {
@@ -203,7 +206,7 @@ impl Pinger {
                     thread_rx,
                     tx,
                     txv6,
-                    addrs,
+                    targets,
                     max_rtt,
                 );
             });
@@ -224,30 +227,35 @@ impl Pinger {
             let mut iter = icmp_packet_iter(&mut receiver);
             loop {
                 match iter.next() {
-                    Ok((packet, addr)) => {
-                        if packet.get_icmp_type() == icmp::IcmpType::new(0) {
-                            let start_time = timer.read().unwrap();
-                            match thread_tx.send(PingResult::Receive {
-                                addr: addr,
-                                rtt: Instant::now().duration_since(*start_time),
-                            }) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    if !*stop.lock().unwrap() {
-                                        error!("Error sending ping result on channel: {}", e)
-                                    } else {
-                                        return;
+                    Ok((packet, addr)) => match EchoReplyPacket::new(packet.packet()) {
+                        Some(echo_reply) => {
+                            if packet.get_icmp_type() == icmp::IcmpType::new(0) {
+                                let start_time = timer.read().unwrap();
+                                match thread_tx.send(ReceivedPing {
+                                    addr,
+                                    identifier: echo_reply.get_identifier(),
+                                    sequence_number: echo_reply.get_sequence_number(),
+                                    rtt: Instant::now().duration_since(*start_time),
+                                }) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        if !*stop.lock().unwrap() {
+                                            error!("Error sending ping result on channel: {}", e)
+                                        } else {
+                                            return;
+                                        }
                                     }
                                 }
+                            } else {
+                                debug!(
+                                    "ICMP type other than reply (0) received from {:?}: {:?}",
+                                    addr,
+                                    packet.get_icmp_type()
+                                );
                             }
-                        } else {
-                            debug!(
-                                "ICMP type other than reply (0) received from {:?}: {:?}",
-                                addr,
-                                packet.get_icmp_type()
-                            );
                         }
-                    }
+                        None => {}
+                    },
                     Err(e) => {
                         error!("An error occurred while reading: {}", e);
                     }
@@ -269,8 +277,10 @@ impl Pinger {
                     Ok((packet, addr)) => {
                         if packet.get_icmpv6_type() == icmpv6::Icmpv6Type::new(129) {
                             let start_time = timerv6.read().unwrap();
-                            match thread_txv6.send(PingResult::Receive {
-                                addr: addr,
+                            match thread_txv6.send(ReceivedPing {
+                                addr,
+                                identifier: 0,
+                                sequence_number: 0,
                                 rtt: Instant::now().duration_since(*start_time),
                             }) {
                                 Ok(_) => {}
@@ -340,18 +350,18 @@ mod tests {
         match Pinger::new(None, None) {
             Ok((test_pinger, _)) => {
                 test_pinger.add_ipaddr("127.0.0.1");
-                assert_eq!(test_pinger.addrs.lock().unwrap().len(), 1);
+                assert_eq!(test_pinger.targets.lock().unwrap().len(), 1);
                 assert!(test_pinger
-                    .addrs
+                    .targets
                     .lock()
                     .unwrap()
                     .contains_key(&"127.0.0.1".parse::<IpAddr>().unwrap()));
 
                 test_pinger.remove_ipaddr("127.0.0.1");
-                assert_eq!(test_pinger.addrs.lock().unwrap().len(), 0);
+                assert_eq!(test_pinger.targets.lock().unwrap().len(), 0);
                 assert_eq!(
                     test_pinger
-                        .addrs
+                        .targets
                         .lock()
                         .unwrap()
                         .contains_key(&"127.0.0.1".parse::<IpAddr>().unwrap()),
@@ -386,8 +396,8 @@ mod tests {
         match Pinger::new(None, None) {
             Ok((test_pinger, test_channel)) => {
                 let test_addrs = vec!["127.0.0.1", "7.7.7.7", "::1"];
-                for addr in test_addrs.iter() {
-                    test_pinger.add_ipaddr(addr);
+                for target in test_addrs.iter() {
+                    test_pinger.add_ipaddr(target);
                 }
                 test_pinger.ping_once();
                 for _ in test_addrs.iter() {
@@ -404,6 +414,9 @@ mod tests {
                                 } else {
                                     assert!(false)
                                 }
+                            }
+                            _ => {
+                                assert!(false)
                             }
                         },
                         Err(_) => assert!(false),
