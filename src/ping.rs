@@ -121,17 +121,18 @@ pub fn send_pings(
             }
             ping.seen = false;
         }
+        let start_time = Instant::now();
         {
             // start the timer
             let mut timer = timer.write().unwrap();
-            *timer = Instant::now();
+            *timer = start_time;
         }
         loop {
             // use recv_timeout so we don't cause a CPU to needlessly spin
             match thread_rx
                 .lock()
                 .unwrap()
-                .recv_timeout(Duration::from_millis(100))
+                .recv_timeout(max_rtt.saturating_sub(start_time.elapsed()))
             {
                 Ok(ping_result) => {
                     match ping_result {
@@ -172,8 +173,7 @@ pub fn send_pings(
                 }
                 Err(_) => {
                     // Check we haven't exceeded the max rtt
-                    let start_time = timer.read().unwrap();
-                    if Instant::now().duration_since(*start_time) > *max_rtt {
+                    if start_time.elapsed() >= *max_rtt {
                         break;
                     }
                 }
