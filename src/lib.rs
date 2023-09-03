@@ -230,7 +230,7 @@ impl Pinger {
                 match iter.next() {
                     Ok((packet, addr)) => match IcmpEchoReplyPacket::new(packet.packet()) {
                         Some(echo_reply) => {
-                            if packet.get_icmp_type() == icmp::IcmpType::new(0) {
+                            if packet.get_icmp_type() == icmp::IcmpTypes::EchoReply {
                                 let start_time = timer.read().unwrap();
                                 match thread_tx.send(ReceivedPing {
                                     addr,
@@ -277,7 +277,7 @@ impl Pinger {
                 match iter.next() {
                     Ok((packet, addr)) => match Icmpv6EchoReplyPacket::new(packet.packet()) {
                         Some(echo_reply) => {
-                            if packet.get_icmpv6_type() == icmpv6::Icmpv6Type::new(129) {
+                            if packet.get_icmpv6_type() == icmpv6::Icmpv6Types::EchoReply {
                                 let start_time = timerv6.read().unwrap();
                                 match thread_txv6.send(ReceivedPing {
                                     addr,
@@ -296,7 +296,7 @@ impl Pinger {
                                 }
                             } else {
                                 debug!(
-                                    "ICMP type other than reply (129) received from {:?}: {:?}",
+                                    "ICMPv6 type other than reply (129) received from {:?}: {:?}",
                                     addr,
                                     packet.get_icmpv6_type()
                                 );
