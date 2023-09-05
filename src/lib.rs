@@ -1,3 +1,13 @@
+//! ICMP ping library in Rust inspired by [go-fastping][1] and [AnyEvent::FastPing][2]
+//!
+//! fastping-rs is a Rust ICMP ping library for quickly sending and measuring batches of ICMP echo
+//! request packets. The design prioritizes pinging a large number of hosts over a long time,
+//! rather than pinging individual hosts once-off.
+//!
+//! [`Pinger`] provides the functionality for this module.
+//!
+//! [1]: https://pkg.go.dev/github.com/kanocz/go-fastping
+//! [2]: https://metacpan.org/pod/AnyEvent::FastPing
 extern crate pnet;
 extern crate pnet_macros_support;
 #[macro_use]
@@ -26,14 +36,20 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-// ping result type.  Idle represents pings that have not received a repsonse within the max_rtt.
-// Receive represents pings which have received a repsonse
+/// The result of a single ping
 #[derive(Debug)]
 pub enum PingResult {
+    /// Pings that have not received a response within max_rtt
     Idle { addr: IpAddr },
+    /// Pings which have received a response
     Receive { addr: IpAddr, rtt: Duration },
 }
 
+/// A long-lived pinger
+///
+/// [`Pinger`]s create raw sockets for sending and receiving ICMP echo requests, which requires
+/// special privileges on most operating systems. A thread is created to read from each (IPv4 and
+/// IPv6) socket, and results are provided to the client on the channel in the `results` field.
 pub struct Pinger {
     // Number of milliseconds of an idle timeout. Once it passed,
     // the library calls an idle callback function.  Default is 2000
@@ -74,7 +90,7 @@ pub struct Pinger {
 }
 
 impl Pinger {
-    // initialize the pinger and start the icmp and icmpv6 listeners
+    /// Create a [`Pinger`], create sockets, and start network listener threads
     pub fn new(
         max_rtt: Option<Duration>,
         size: Option<usize>,
@@ -109,31 +125,31 @@ impl Pinger {
         Ok((pinger, receiver))
     }
 
-    // add either an ipv4 or ipv6 target address for pinging
+    /// Add a new target for pinging
     pub fn add_ipaddr(&self, addr: IpAddr) {
         debug!("Address added {}", addr);
         let new_ping = Ping::new(addr);
         self.targets.lock().unwrap().insert(addr, new_ping);
     }
 
-    // remove a previously added ipv4 or ipv6 target address
+    /// Remove a previously added target address
     pub fn remove_ipaddr(&self, addr: IpAddr) {
         debug!("Address removed {}", addr);
         self.targets.lock().unwrap().remove(&addr);
     }
 
-    // stop running the continous pinger
+    /// Stop running the continous pinger
     pub fn stop_pinger(&self) {
         let mut stop = self.stop.lock().unwrap();
         *stop = true;
     }
 
-    // run one round of pinging and stop
+    /// Ping each target address once and stop
     pub fn ping_once(&self) {
         self.run_pings(true)
     }
 
-    // run the continuous pinger
+    /// Run the pinger continuously
     pub fn run_pinger(&self) {
         self.run_pings(false)
     }
