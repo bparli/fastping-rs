@@ -75,7 +75,7 @@ pub struct Pinger {
 
 impl Pinger {
     // initialize the pinger and start the icmp and icmpv6 listeners
-    pub fn new(max_rtt: Option<Duration>, _size: Option<usize>) -> NewPingerResult {
+    pub fn new(max_rtt: Option<Duration>, size: Option<usize>) -> NewPingerResult {
         let targets = BTreeMap::new();
         let (sender, receiver) = channel();
 
@@ -93,10 +93,10 @@ impl Pinger {
 
         let (thread_tx, thread_rx) = channel();
 
-        let mut pinger = Pinger {
+        let pinger = Pinger {
             max_rtt: Arc::new(max_rtt.unwrap_or(Duration::from_millis(2000))),
             targets: Arc::new(Mutex::new(targets)),
-            size: _size.unwrap_or(16),
+            size: size.unwrap_or(16),
             results_sender: sender,
             tx: Arc::new(Mutex::new(tx)),
             rx: Arc::new(Mutex::new(rx)),
@@ -107,9 +107,6 @@ impl Pinger {
             timer: Arc::new(RwLock::new(Instant::now())),
             stop: Arc::new(Mutex::new(false)),
         };
-        if let Some(size_value) = _size {
-            pinger.size = size_value;
-        }
 
         pinger.start_listener();
         Ok((pinger, receiver))
