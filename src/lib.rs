@@ -113,32 +113,16 @@ impl Pinger {
     }
 
     // add either an ipv4 or ipv6 target address for pinging
-    pub fn add_ipaddr(&self, ipaddr: &str) {
-        let addr = ipaddr.parse::<IpAddr>();
-        match addr {
-            Ok(valid_addr) => {
-                debug!("Address added {}", valid_addr);
-                let new_ping = Ping::new(valid_addr);
-                self.targets.lock().unwrap().insert(valid_addr, new_ping);
-            }
-            Err(e) => {
-                error!("Error adding ip address {}. Error: {}", ipaddr, e);
-            }
-        };
+    pub fn add_ipaddr(&self, addr: IpAddr) {
+        debug!("Address added {}", addr);
+        let new_ping = Ping::new(addr);
+        self.targets.lock().unwrap().insert(addr, new_ping);
     }
 
     // remove a previously added ipv4 or ipv6 target address
-    pub fn remove_ipaddr(&self, ipaddr: &str) {
-        let addr = ipaddr.parse::<IpAddr>();
-        match addr {
-            Ok(valid_addr) => {
-                debug!("Address removed {}", valid_addr);
-                self.targets.lock().unwrap().remove(&valid_addr);
-            }
-            Err(e) => {
-                error!("Error removing ip address {}. Error: {}", ipaddr, e);
-            }
-        };
+    pub fn remove_ipaddr(&self, addr: IpAddr) {
+        debug!("Address removed {}", addr);
+        self.targets.lock().unwrap().remove(&addr);
     }
 
     // stop running the continous pinger
@@ -347,7 +331,7 @@ mod tests {
     fn test_add_remove_addrs() {
         match Pinger::new(None, None) {
             Ok((test_pinger, _)) => {
-                test_pinger.add_ipaddr("127.0.0.1");
+                test_pinger.add_ipaddr("127.0.0.1".parse().unwrap());
                 assert_eq!(test_pinger.targets.lock().unwrap().len(), 1);
                 assert!(test_pinger
                     .targets
@@ -355,7 +339,7 @@ mod tests {
                     .unwrap()
                     .contains_key(&"127.0.0.1".parse::<IpAddr>().unwrap()));
 
-                test_pinger.remove_ipaddr("127.0.0.1");
+                test_pinger.remove_ipaddr("127.0.0.1".parse().unwrap());
                 assert_eq!(test_pinger.targets.lock().unwrap().len(), 0);
                 assert_eq!(
                     test_pinger
@@ -395,7 +379,7 @@ mod tests {
             Ok((test_pinger, test_channel)) => {
                 let test_addrs = vec!["127.0.0.1", "7.7.7.7", "::1"];
                 for target in test_addrs.iter() {
-                    test_pinger.add_ipaddr(target);
+                    test_pinger.add_ipaddr(target.parse().unwrap());
                 }
                 test_pinger.ping_once();
                 for _ in test_addrs.iter() {

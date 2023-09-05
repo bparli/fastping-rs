@@ -38,10 +38,10 @@ fn main() {
         Err(e) => panic!("Error creating pinger: {}", e),
     };
 
-    pinger.add_ipaddr("8.8.8.8");
-    pinger.add_ipaddr("1.1.1.1");
-    pinger.add_ipaddr("7.7.7.7");
-    pinger.add_ipaddr("2001:4860:4860::8888");
+    pinger.add_ipaddr("8.8.8.8".parse().unwrap());
+    pinger.add_ipaddr("1.1.1.1".parse().unwrap());
+    pinger.add_ipaddr("7.7.7.7".parse().unwrap());
+    pinger.add_ipaddr("2001:4860:4860::8888".parse().unwrap());
     pinger.run_pinger();
 
     loop {
