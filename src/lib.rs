@@ -7,7 +7,8 @@ extern crate rand;
 mod ping;
 
 use ping::{send_pings, Ping, ReceivedPing};
-use pnet::packet::icmp::echo_reply::EchoReplyPacket;
+use pnet::packet::icmp::echo_reply::EchoReplyPacket as IcmpEchoReplyPacket;
+use pnet::packet::icmpv6::echo_reply::EchoReplyPacket as Icmpv6EchoReplyPacket;
 use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::Packet;
 use pnet::packet::{icmp, icmpv6};
@@ -227,9 +228,9 @@ impl Pinger {
             let mut iter = icmp_packet_iter(&mut receiver);
             loop {
                 match iter.next() {
-                    Ok((packet, addr)) => match EchoReplyPacket::new(packet.packet()) {
+                    Ok((packet, addr)) => match IcmpEchoReplyPacket::new(packet.packet()) {
                         Some(echo_reply) => {
-                            if packet.get_icmp_type() == icmp::IcmpType::new(0) {
+                            if packet.get_icmp_type() == icmp::IcmpTypes::EchoReply {
                                 let start_time = timer.read().unwrap();
                                 match thread_tx.send(ReceivedPing {
                                     addr,
@@ -274,32 +275,35 @@ impl Pinger {
             let mut iter = icmpv6_packet_iter(&mut receiver);
             loop {
                 match iter.next() {
-                    Ok((packet, addr)) => {
-                        if packet.get_icmpv6_type() == icmpv6::Icmpv6Type::new(129) {
-                            let start_time = timerv6.read().unwrap();
-                            match thread_txv6.send(ReceivedPing {
-                                addr,
-                                identifier: 0,
-                                sequence_number: 0,
-                                rtt: Instant::now().duration_since(*start_time),
-                            }) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    if !*stopv6.lock().unwrap() {
-                                        error!("Error sending ping result on channel: {}", e)
-                                    } else {
-                                        return;
+                    Ok((packet, addr)) => match Icmpv6EchoReplyPacket::new(packet.packet()) {
+                        Some(echo_reply) => {
+                            if packet.get_icmpv6_type() == icmpv6::Icmpv6Types::EchoReply {
+                                let start_time = timerv6.read().unwrap();
+                                match thread_txv6.send(ReceivedPing {
+                                    addr,
+                                    identifier: echo_reply.get_identifier(),
+                                    sequence_number: echo_reply.get_sequence_number(),
+                                    rtt: Instant::now().duration_since(*start_time),
+                                }) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        if !*stopv6.lock().unwrap() {
+                                            error!("Error sending ping result on channel: {}", e)
+                                        } else {
+                                            return;
+                                        }
                                     }
                                 }
+                            } else {
+                                debug!(
+                                    "ICMPv6 type other than reply (129) received from {:?}: {:?}",
+                                    addr,
+                                    packet.get_icmpv6_type()
+                                );
                             }
-                        } else {
-                            debug!(
-                                "ICMP type other than reply (129) received from {:?}: {:?}",
-                                addr,
-                                packet.get_icmpv6_type()
-                            );
                         }
-                    }
+                        None => {}
+                    },
                     Err(e) => {
                         error!("An error occurred while reading: {}", e);
                     }

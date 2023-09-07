@@ -1,10 +1,7 @@
-use pnet::packet::icmp::echo_request;
-use pnet::packet::icmp::IcmpTypes;
-use pnet::packet::icmpv6::{Icmpv6Types, MutableIcmpv6Packet};
 use pnet::packet::Packet;
+use pnet::packet::{icmp, icmpv6};
 use pnet::transport::TransportSender;
 use pnet::util;
-use pnet_macros_support::types::*;
 use rand::random;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -29,13 +26,9 @@ pub struct ReceivedPing {
 
 impl Ping {
     pub fn new(addr: IpAddr) -> Ping {
-        let mut identifier = 0;
-        if addr.is_ipv4() {
-            identifier = random::<u16>();
-        }
         Ping {
             addr,
-            identifier,
+            identifier: random::<u16>(),
             sequence_number: 0,
             seen: false,
         }
@@ -67,13 +60,12 @@ fn send_echo(
     // Allocate enough space for a new packet
     let mut vec: Vec<u8> = vec![0; size];
 
-    // Use echo_request so we can set the identifier and sequence number
-    let mut echo_packet = echo_request::MutableEchoRequestPacket::new(&mut vec[..]).unwrap();
+    let mut echo_packet = icmp::echo_request::MutableEchoRequestPacket::new(&mut vec[..]).unwrap();
     echo_packet.set_sequence_number(ping.increment_sequence_number());
     echo_packet.set_identifier(ping.get_identifier());
-    echo_packet.set_icmp_type(IcmpTypes::EchoRequest);
+    echo_packet.set_icmp_type(icmp::IcmpTypes::EchoRequest);
 
-    let csum = icmp_checksum(&echo_packet);
+    let csum = util::checksum(echo_packet.packet(), 1);
     echo_packet.set_checksum(csum);
 
     tx.send_to(echo_packet, ping.get_addr())
@@ -81,19 +73,22 @@ fn send_echo(
 
 fn send_echov6(
     tx: &mut TransportSender,
-    addr: IpAddr,
+    ping: &mut Ping,
     size: usize,
 ) -> Result<usize, std::io::Error> {
     // Allocate enough space for a new packet
     let mut vec: Vec<u8> = vec![0; size];
 
-    let mut echo_packet = MutableIcmpv6Packet::new(&mut vec[..]).unwrap();
-    echo_packet.set_icmpv6_type(Icmpv6Types::EchoRequest);
+    let mut echo_packet =
+        icmpv6::echo_request::MutableEchoRequestPacket::new(&mut vec[..]).unwrap();
+    echo_packet.set_sequence_number(ping.increment_sequence_number());
+    echo_packet.set_identifier(ping.get_identifier());
+    echo_packet.set_icmpv6_type(icmpv6::Icmpv6Types::EchoRequest);
 
-    let csum = icmpv6_checksum(&echo_packet);
+    let csum = util::checksum(echo_packet.packet(), 1);
     echo_packet.set_checksum(csum);
 
-    tx.send_to(echo_packet, addr)
+    tx.send_to(echo_packet, ping.get_addr())
 }
 
 pub fn send_pings(
@@ -112,7 +107,7 @@ pub fn send_pings(
             match if addr.is_ipv4() {
                 send_echo(&mut tx.lock().unwrap(), ping, size)
             } else if addr.is_ipv6() {
-                send_echov6(&mut txv6.lock().unwrap(), *addr, size)
+                send_echov6(&mut txv6.lock().unwrap(), ping, size)
             } else {
                 Ok(0)
             } {
@@ -192,14 +187,6 @@ pub fn send_pings(
             return;
         }
     }
-}
-
-fn icmp_checksum(packet: &echo_request::MutableEchoRequestPacket) -> u16be {
-    util::checksum(packet.packet(), 1)
-}
-
-fn icmpv6_checksum(packet: &MutableIcmpv6Packet) -> u16be {
-    util::checksum(packet.packet(), 1)
 }
 
 #[cfg(test)]
