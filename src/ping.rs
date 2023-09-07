@@ -134,40 +134,34 @@ pub fn send_pings(
                 .recv_timeout(Duration::from_millis(100))
             {
                 Ok(ping_result) => {
-                    match ping_result {
-                        ReceivedPing {
-                            addr,
-                            identifier,
-                            sequence_number,
-                            rtt: _,
-                        } => {
-                            // Update the address to the ping response being received
-                            if let Some(ping) = targets.lock().unwrap().get_mut(&addr) {
-                                if ping.get_identifier() == identifier
-                                    && ping.get_sequence_number() == sequence_number
-                                {
-                                    ping.seen = true;
-                                    // Send the ping result over the client channel
-                                    match results_sender.send(PingResult::Receive {
-                                        addr: ping_result.addr,
-                                        rtt: ping_result.rtt,
-                                    }) {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            if !*stop.lock().unwrap() {
-                                                error!(
-                                                    "Error sending ping result on channel: {}",
-                                                    e
-                                                )
-                                            }
-                                        }
+                    // match ping_result {
+                    let ReceivedPing {
+                        addr,
+                        identifier,
+                        sequence_number,
+                        rtt: _,
+                    } = ping_result;
+                    // Update the address to the ping response being received
+                    if let Some(ping) = targets.lock().unwrap().get_mut(&addr) {
+                        if ping.get_identifier() == identifier
+                            && ping.get_sequence_number() == sequence_number
+                        {
+                            ping.seen = true;
+                            // Send the ping result over the client channel
+                            match results_sender.send(PingResult::Receive {
+                                addr: ping_result.addr,
+                                rtt: ping_result.rtt,
+                            }) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    if !*stop.lock().unwrap() {
+                                        error!("Error sending ping result on channel: {}", e)
                                     }
-                                } else {
-                                    debug!("Received echo reply from target {}, but sequence_number (expected {} but got {}) and identifier (expected {} but got {}) don't match", addr, ping.get_sequence_number(), sequence_number, ping.get_identifier(), identifier);
                                 }
                             }
+                        } else {
+                            debug!("Received echo reply from target {}, but sequence_number (expected {} but got {}) and identifier (expected {} but got {}) don't match", addr, ping.get_sequence_number(), sequence_number, ping.get_identifier(), identifier);
                         }
-                        _ => {}
                     }
                 }
                 Err(_) => {
