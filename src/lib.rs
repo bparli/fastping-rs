@@ -4,8 +4,10 @@ extern crate pnet_macros_support;
 extern crate log;
 extern crate rand;
 
+pub mod error;
 mod ping;
 
+use crate::error::*;
 use ping::{send_pings, Ping, ReceivedPing};
 use pnet::packet::icmp::echo_reply::EchoReplyPacket as IcmpEchoReplyPacket;
 use pnet::packet::icmpv6::echo_reply::EchoReplyPacket as Icmpv6EchoReplyPacket;
@@ -23,9 +25,6 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
-
-// result type returned by fastping_rs::Pinger::new()
-pub type NewPingerResult = Result<(Pinger, Receiver<PingResult>), String>;
 
 // ping result type.  Idle represents pings that have not received a repsonse within the max_rtt.
 // Receive represents pings which have received a repsonse
@@ -75,21 +74,18 @@ pub struct Pinger {
 
 impl Pinger {
     // initialize the pinger and start the icmp and icmpv6 listeners
-    pub fn new(max_rtt: Option<Duration>, size: Option<usize>) -> NewPingerResult {
+    pub fn new(
+        max_rtt: Option<Duration>,
+        size: Option<usize>,
+    ) -> Result<(Self, Receiver<PingResult>), Error> {
         let targets = BTreeMap::new();
         let (sender, receiver) = channel();
 
         let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
-        let (tx, rx) = match transport_channel(4096, protocol) {
-            Ok((tx, rx)) => (tx, rx),
-            Err(e) => return Err(e.to_string()),
-        };
+        let (tx, rx) = transport_channel(4096, protocol)?;
 
         let protocolv6 = Layer4(Ipv6(IpNextHeaderProtocols::Icmpv6));
-        let (txv6, rxv6) = match transport_channel(4096, protocolv6) {
-            Ok((txv6, rxv6)) => (txv6, rxv6),
-            Err(e) => return Err(e.to_string()),
-        };
+        let (txv6, rxv6) = transport_channel(4096, protocolv6)?;
 
         let (thread_tx, thread_rx) = channel();
 
