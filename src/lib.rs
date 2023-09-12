@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 
 // ping result type.  Idle represents pings that have not received a repsonse within the max_rtt.
 // Receive represents pings which have received a repsonse
+#[derive(Debug)]
 pub enum PingResult {
     Idle { addr: IpAddr },
     Receive { addr: IpAddr, rtt: Duration },

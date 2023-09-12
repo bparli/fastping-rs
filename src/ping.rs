@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use PingResult;
 
+#[derive(Debug)]
 pub struct Ping {
     addr: IpAddr,
     identifier: u16,
@@ -17,6 +18,7 @@ pub struct Ping {
     pub seen: bool,
 }
 
+#[derive(Debug)]
 pub struct ReceivedPing {
     pub addr: IpAddr,
     pub identifier: u16,
