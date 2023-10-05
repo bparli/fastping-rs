@@ -1,6 +1,6 @@
 [package]
 name = "fastping-rs"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["bparli <bparli@gmail.com>"]
 license = "MIT"
 homepage = "https://github.com/bparli/fastping-rs"
