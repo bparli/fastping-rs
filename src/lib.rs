@@ -1,11 +1,23 @@
+//! ICMP ping library in Rust inspired by [go-fastping][1] and [AnyEvent::FastPing][2]
+//!
+//! fastping-rs is a Rust ICMP ping library for quickly sending and measuring batches of ICMP echo
+//! request packets. The design prioritizes pinging a large number of hosts over a long time,
+//! rather than pinging individual hosts once-off.
+//!
+//! [`Pinger`] provides the functionality for this module.
+//!
+//! [1]: https://pkg.go.dev/github.com/kanocz/go-fastping
+//! [2]: https://metacpan.org/pod/AnyEvent::FastPing
 extern crate pnet;
 extern crate pnet_macros_support;
 #[macro_use]
 extern crate log;
 extern crate rand;
 
+pub mod error;
 mod ping;
 
+use crate::error::*;
 use ping::{send_pings, Ping, ReceivedPing};
 use pnet::packet::icmp::echo_reply::EchoReplyPacket as IcmpEchoReplyPacket;
 use pnet::packet::icmpv6::echo_reply::EchoReplyPacket as Icmpv6EchoReplyPacket;
@@ -24,16 +36,20 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-// result type returned by fastping_rs::Pinger::new()
-pub type NewPingerResult = Result<(Pinger, Receiver<PingResult>), String>;
-
-// ping result type.  Idle represents pings that have not received a repsonse within the max_rtt.
-// Receive represents pings which have received a repsonse
+/// The result of a single ping
+#[derive(Debug)]
 pub enum PingResult {
+    /// Pings that have not received a response within max_rtt
     Idle { addr: IpAddr },
+    /// Pings which have received a response
     Receive { addr: IpAddr, rtt: Duration },
 }
 
+/// A long-lived pinger
+///
+/// [`Pinger`]s create raw sockets for sending and receiving ICMP echo requests, which requires
+/// special privileges on most operating systems. A thread is created to read from each (IPv4 and
+/// IPv6) socket, and results are provided to the client on the channel in the `results` field.
 pub struct Pinger {
     // Number of milliseconds of an idle timeout. Once it passed,
     // the library calls an idle callback function.  Default is 2000
@@ -74,29 +90,26 @@ pub struct Pinger {
 }
 
 impl Pinger {
-    // initialize the pinger and start the icmp and icmpv6 listeners
-    pub fn new(_max_rtt: Option<u64>, _size: Option<usize>) -> NewPingerResult {
+    /// Create a [`Pinger`], create sockets, and start network listener threads
+    pub fn new(
+        max_rtt: Option<Duration>,
+        size: Option<usize>,
+    ) -> Result<(Self, Receiver<PingResult>), Error> {
         let targets = BTreeMap::new();
         let (sender, receiver) = channel();
 
         let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
-        let (tx, rx) = match transport_channel(4096, protocol) {
-            Ok((tx, rx)) => (tx, rx),
-            Err(e) => return Err(e.to_string()),
-        };
+        let (tx, rx) = transport_channel(4096, protocol)?;
 
         let protocolv6 = Layer4(Ipv6(IpNextHeaderProtocols::Icmpv6));
-        let (txv6, rxv6) = match transport_channel(4096, protocolv6) {
-            Ok((txv6, rxv6)) => (txv6, rxv6),
-            Err(e) => return Err(e.to_string()),
-        };
+        let (txv6, rxv6) = transport_channel(4096, protocolv6)?;
 
         let (thread_tx, thread_rx) = channel();
 
-        let mut pinger = Pinger {
-            max_rtt: Arc::new(Duration::from_millis(2000)),
+        let pinger = Pinger {
+            max_rtt: Arc::new(max_rtt.unwrap_or(Duration::from_millis(2000))),
             targets: Arc::new(Mutex::new(targets)),
-            size: _size.unwrap_or(16),
+            size: size.unwrap_or(16),
             results_sender: sender,
             tx: Arc::new(Mutex::new(tx)),
             rx: Arc::new(Mutex::new(rx)),
@@ -107,58 +120,36 @@ impl Pinger {
             timer: Arc::new(RwLock::new(Instant::now())),
             stop: Arc::new(Mutex::new(false)),
         };
-        if let Some(rtt_value) = _max_rtt {
-            pinger.max_rtt = Arc::new(Duration::from_millis(rtt_value));
-        }
-        if let Some(size_value) = _size {
-            pinger.size = size_value;
-        }
 
         pinger.start_listener();
         Ok((pinger, receiver))
     }
 
-    // add either an ipv4 or ipv6 target address for pinging
-    pub fn add_ipaddr(&self, ipaddr: &str) {
-        let addr = ipaddr.parse::<IpAddr>();
-        match addr {
-            Ok(valid_addr) => {
-                debug!("Address added {}", valid_addr);
-                let new_ping = Ping::new(valid_addr);
-                self.targets.lock().unwrap().insert(valid_addr, new_ping);
-            }
-            Err(e) => {
-                error!("Error adding ip address {}. Error: {}", ipaddr, e);
-            }
-        };
+    /// Add a new target for pinging
+    pub fn add_ipaddr(&self, addr: IpAddr) {
+        debug!("Address added {}", addr);
+        let new_ping = Ping::new(addr);
+        self.targets.lock().unwrap().insert(addr, new_ping);
     }
 
-    // remove a previously added ipv4 or ipv6 target address
-    pub fn remove_ipaddr(&self, ipaddr: &str) {
-        let addr = ipaddr.parse::<IpAddr>();
-        match addr {
-            Ok(valid_addr) => {
-                debug!("Address removed {}", valid_addr);
-                self.targets.lock().unwrap().remove(&valid_addr);
-            }
-            Err(e) => {
-                error!("Error removing ip address {}. Error: {}", ipaddr, e);
-            }
-        };
+    /// Remove a previously added target address
+    pub fn remove_ipaddr(&self, addr: IpAddr) {
+        debug!("Address removed {}", addr);
+        self.targets.lock().unwrap().remove(&addr);
     }
 
-    // stop running the continous pinger
+    /// Stop running the continous pinger
     pub fn stop_pinger(&self) {
         let mut stop = self.stop.lock().unwrap();
         *stop = true;
     }
 
-    // run one round of pinging and stop
+    /// Ping each target address once and stop
     pub fn ping_once(&self) {
         self.run_pings(true)
     }
 
-    // run the continuous pinger
+    /// Run the pinger continuously
     pub fn run_pinger(&self) {
         self.run_pings(false)
     }
@@ -195,7 +186,7 @@ impl Pinger {
                 tx,
                 txv6,
                 targets,
-                max_rtt,
+                &max_rtt,
             );
         } else {
             thread::spawn(move || {
@@ -208,7 +199,7 @@ impl Pinger {
                     tx,
                     txv6,
                     targets,
-                    max_rtt,
+                    &max_rtt,
                 );
             });
         }
@@ -322,7 +313,7 @@ mod tests {
         // test we can create a new pinger with optional arguments,
         // test it returns the new pinger and a client channel
         // test we can use the client channel
-        match Pinger::new(Some(3000 as u64), Some(24)) {
+        match Pinger::new(Some(Duration::from_millis(3000)), Some(24)) {
             Ok((test_pinger, test_channel)) => {
                 assert_eq!(test_pinger.max_rtt, Arc::new(Duration::new(3, 0)));
                 assert_eq!(test_pinger.size, 24);
@@ -353,7 +344,7 @@ mod tests {
     fn test_add_remove_addrs() {
         match Pinger::new(None, None) {
             Ok((test_pinger, _)) => {
-                test_pinger.add_ipaddr("127.0.0.1");
+                test_pinger.add_ipaddr("127.0.0.1".parse().unwrap());
                 assert_eq!(test_pinger.targets.lock().unwrap().len(), 1);
                 assert!(test_pinger
                     .targets
@@ -361,7 +352,7 @@ mod tests {
                     .unwrap()
                     .contains_key(&"127.0.0.1".parse::<IpAddr>().unwrap()));
 
-                test_pinger.remove_ipaddr("127.0.0.1");
+                test_pinger.remove_ipaddr("127.0.0.1".parse().unwrap());
                 assert_eq!(test_pinger.targets.lock().unwrap().len(), 0);
                 assert_eq!(
                     test_pinger
@@ -401,7 +392,7 @@ mod tests {
             Ok((test_pinger, test_channel)) => {
                 let test_addrs = vec!["127.0.0.1", "7.7.7.7", "::1"];
                 for target in test_addrs.iter() {
-                    test_pinger.add_ipaddr(target);
+                    test_pinger.add_ipaddr(target.parse().unwrap());
                 }
                 test_pinger.ping_once();
                 for _ in test_addrs.iter() {

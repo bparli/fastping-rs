@@ -38,10 +38,10 @@ fn main() {
         Err(e) => panic!("Error creating pinger: {}", e),
     };
 
-    pinger.add_ipaddr("8.8.8.8");
-    pinger.add_ipaddr("1.1.1.1");
-    pinger.add_ipaddr("7.7.7.7");
-    pinger.add_ipaddr("2001:4860:4860::8888");
+    pinger.add_ipaddr("8.8.8.8".parse().unwrap());
+    pinger.add_ipaddr("1.1.1.1".parse().unwrap());
+    pinger.add_ipaddr("7.7.7.7".parse().unwrap());
+    pinger.add_ipaddr("2001:4860:4860::8888".parse().unwrap());
     pinger.run_pinger();
 
     loop {
@@ -64,7 +64,7 @@ fn main() {
 Note a Pinger is initialized with two arguments: the maximum round trip time before an address is considered "idle" (2 seconds by default) and the size of the ping data packet (16 bytes by default).
 To explicitly set these values Pinger would be initialized like so:
 ```rust
-Pinger::new(Some(3000 as u64), Some(24 as usize))
+Pinger::new(Some(Duration::from_millis(3000)), Some(24 as usize))
 ```
 
 The public functions `stop_pinger()` to stop the continuous pinger and `ping_once()` to only run one round of pinging are also available.
