@@ -419,9 +419,6 @@ mod tests {
                                     assert!(false)
                                 }
                             }
-                            _ => {
-                                assert!(false)
-                            }
                         },
                         Err(_) => assert!(false),
                     }

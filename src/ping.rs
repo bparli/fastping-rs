@@ -1,3 +1,4 @@
+use crate::PingResult;
 use pnet::packet::Packet;
 use pnet::packet::{icmp, icmpv6};
 use pnet::transport::TransportSender;
@@ -8,7 +9,6 @@ use std::net::IpAddr;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use PingResult;
 
 pub struct Ping {
     addr: IpAddr,
