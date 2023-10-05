@@ -85,8 +85,7 @@ fn send_echov6(
     echo_packet.set_identifier(ping.get_identifier());
     echo_packet.set_icmpv6_type(icmpv6::Icmpv6Types::EchoRequest);
 
-    let csum = util::checksum(echo_packet.packet(), 1);
-    echo_packet.set_checksum(csum);
+    // Note: ICMPv6 checksum always calculated by the kernel, see RFC 3542
 
     tx.send_to(echo_packet, ping.get_addr())
 }
